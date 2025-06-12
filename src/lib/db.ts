@@ -48,7 +48,7 @@ interface OfflineDB extends DBSchema {
   };
 }
 
-let db: IDBPDatabase<OfflineDB>;
+let db: IDBPDatabase<OfflineDB> | null = null;
 
 const encrypt = (data: any): string => {
   try {
@@ -71,9 +71,9 @@ const encrypt = (data: any): string => {
     }
 
     return encrypted.toString();
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('Encryption error:', error);
-    throw new Error(`Failed to encrypt data: ${error.message}`);
+    throw new Error(`Failed to encrypt data: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 };
 
@@ -111,30 +111,33 @@ const decrypt = (encryptedData: string): any => {
   }
 };
 
-export const initDB = async () => {
-  db = await openDB<OfflineDB>('egrec-pos', 11, {
-    upgrade(db, oldVersion, newVersion, transaction) {
-      if (db.objectStoreNames.contains('offline-sales')) {
-        db.deleteObjectStore('offline-sales');
-      }
+export const initDB = async (): Promise<IDBPDatabase<OfflineDB>> => {
+  if (!db) {
+    db = await openDB<OfflineDB>('egrec-pos', 11, {
+      upgrade(db, oldVersion, newVersion, transaction) {
+        if (db.objectStoreNames.contains('offline-sales')) {
+          db.deleteObjectStore('offline-sales');
+        }
 
-      const salesStore = db.createObjectStore('offline-sales', {
-        keyPath: 'id'
-      });
-      salesStore.createIndex('by-sync-status', 'synced');
-      salesStore.createIndex('by-timestamp', 'timestamp');
-      salesStore.createIndex('by-sync-id', 'syncId', { unique: true });
-    },
-  });
-
-  await cleanupOldSales();
+        const salesStore = db.createObjectStore('offline-sales', {
+          keyPath: 'id'
+        });
+        salesStore.createIndex('by-sync-status', 'synced');
+        salesStore.createIndex('by-timestamp', 'timestamp');
+        salesStore.createIndex('by-sync-id', 'syncId', { unique: true });
+      },
+    });
+    // Commenting out cleanup to prevent transactions from disappearing
+    // await cleanupOldSales();
+  }
+  return db;
 };
 
 export const saveOfflineSale = async (saleData: Omit<OfflineSale, 'id' | 'synced' | 'syncAttempts' | 'lastSyncAttempt' | 'syncId'>) => {
-  if (!db) await initDB();
+  const database = await initDB();
   
   const id = uuidv4();
-  const syncId = saleData.syncId || uuidv4();
+  const syncId = uuidv4();
 
   if (!id || !syncId) {
     throw new Error('Failed to generate valid IDs for offline sale');
@@ -155,7 +158,10 @@ export const saveOfflineSale = async (saleData: Omit<OfflineSale, 'id' | 'synced
       throw new Error('Invalid sale data: missing required properties');
     }
 
-    const existingSale = await db.getFromIndex('offline-sales', 'by-sync-id', syncId);
+    const tx = database.transaction('offline-sales', 'readwrite');
+    const store = tx.objectStore('offline-sales');
+    
+    const existingSale = await store.index('by-sync-id').get(syncId);
     if (existingSale) {
       throw new Error('Sale with this syncId already exists');
     }
@@ -175,19 +181,20 @@ export const saveOfflineSale = async (saleData: Omit<OfflineSale, 'id' | 'synced
       throw new Error('Encryption validation failed');
     }
     
-    await db.put('offline-sales', encryptedData);
+    await store.put(encryptedData);
+    await tx.done;
     return offlineSale;
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('Error saving offline sale:', error);
-    throw new Error(`Failed to save offline sale: ${error.message}`);
+    throw new Error(`Failed to save offline sale: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 };
 
-export const getUnsynedSales = async () => {
-  if (!db) await initDB();
+export const getUnsynedSales = async (): Promise<OfflineSale[]> => {
+  const database = await initDB();
   
   try {
-    const tx = db.transaction('offline-sales', 'readonly');
+    const tx = database.transaction('offline-sales', 'readonly');
     const store = tx.objectStore('offline-sales');
     const index = store.index('by-sync-status');
     const unsynced = await index.getAll(0);
@@ -209,9 +216,9 @@ export const getUnsynedSales = async () => {
   }
 };
 
-export const markSaleAsSynced = async (id: string, syncId: string) => {
-  if (!db) await initDB();
-  const tx = db.transaction('offline-sales', 'readwrite');
+export const markSaleAsSynced = async (id: string, syncId: string): Promise<void> => {
+  const database = await initDB();
+  const tx = database.transaction('offline-sales', 'readwrite');
   const store = tx.objectStore('offline-sales');
   
   try {
@@ -244,9 +251,9 @@ export const markSaleAsSynced = async (id: string, syncId: string) => {
   }
 };
 
-export const updateSyncAttempts = async (id: string) => {
-  if (!db) await initDB();
-  const tx = db.transaction('offline-sales', 'readwrite');
+export const updateSyncAttempts = async (id: string): Promise<void> => {
+  const database = await initDB();
+  const tx = database.transaction('offline-sales', 'readwrite');
   const store = tx.objectStore('offline-sales');
   
   try {
@@ -279,11 +286,11 @@ export const updateSyncAttempts = async (id: string) => {
   }
 };
 
-export const cleanupOldSales = async () => {
-  if (!db) await initDB();
+export const cleanupOldSales = async (): Promise<void> => {
+  const database = await initDB();
   
   try {
-    const tx = db.transaction('offline-sales', 'readwrite');
+    const tx = database.transaction('offline-sales', 'readwrite');
     const store = tx.objectStore('offline-sales');
     const index = store.index('by-timestamp');
     
@@ -299,11 +306,11 @@ export const cleanupOldSales = async () => {
   }
 };
 
-export const clearSyncedData = async () => {
-  if (!db) await initDB();
+export const clearSyncedData = async (): Promise<void> => {
+  const database = await initDB();
   
   try {
-    const tx = db.transaction('offline-sales', 'readwrite');
+    const tx = database.transaction('offline-sales', 'readwrite');
     const store = tx.objectStore('offline-sales');
     
     const index = store.index('by-sync-status');
@@ -313,5 +320,28 @@ export const clearSyncedData = async () => {
     await tx.done;
   } catch (error) {
     console.error('Error clearing synced data:', error);
+  }
+};
+
+export const getOfflineSales = async (): Promise<OfflineSale[]> => {
+  try {
+    const database = await initDB();
+    const tx = database.transaction('offline-sales', 'readonly');
+    const store = tx.objectStore('offline-sales');
+    const sales = await store.getAll();
+    
+    return sales
+      .map(sale => {
+        try {
+          return decrypt(sale.data);
+        } catch (error) {
+          console.error('Error decrypting sale:', error);
+          return null;
+        }
+      })
+      .filter((sale): sale is OfflineSale => sale !== null);
+  } catch (error) {
+    console.error('Error getting offline sales:', error);
+    return [];
   }
 };

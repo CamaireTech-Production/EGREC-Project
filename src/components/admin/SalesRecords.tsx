@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, orderBy, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, orderBy, getDocs, doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { db, auth } from '../../lib/firebase';
 import { Plus, Search, Loader2, Eye, AlertCircle, CheckCircle2, Trash2 } from 'lucide-react';
 import { format } from 'date-fns';
@@ -7,6 +7,7 @@ import { fr } from 'date-fns/locale';
 import { toast } from 'react-hot-toast';
 import { deleteSale } from '../../services/sales';
 import { useUser } from '../../context/UserContext';
+import { getOfflineSales } from '../../lib/db';
 
 interface DeleteConfirmationModalProps {
   onConfirm: (reason: string) => void;
@@ -56,21 +57,83 @@ const DeleteConfirmationModal: React.FC<DeleteConfirmationModalProps> = ({ onCon
   );
 };
 
+interface Sale {
+  id: string;
+  date: Date;
+  deletedAt: any;
+  stockUpdated: boolean;
+  productName: string[];
+  quantity: number[];
+  totalAmount: number;
+  recordedBy: string;
+  agency: string | null;
+  company: string;
+  timestamp: any;
+  synced: boolean;
+  [key: string]: any;
+}
+
+interface OfflineSale {
+  id: string;
+  date: Date;
+  deletedAt: any;
+  stockUpdated: boolean;
+  productName: string[];
+  quantity: number[];
+  totalAmount: number;
+  recordedBy: string;
+  agency: string;
+  company: string;
+  timestamp: any;
+  synced: boolean;
+  [key: string]: any;
+}
+
 const SalesRecords: React.FC = () => {
   const { user, loading: userLoading, error: userError } = useUser();
-  const [pendingSales, setPendingSales] = useState<any[]>([]);
-  const [syncedSales, setSyncedSales] = useState<any[]>([]);
+  const [pendingSales, setPendingSales] = useState<Sale[]>([]);
+  const [syncedSales, setSyncedSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [selectedSale, setSelectedSale] = useState<any>(null);
+  const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
   const [showDeleted, setShowDeleted] = useState(false);
 
-  useEffect(() => {
-    const fetchSales = async () => {
-      if (!user?.company || !user?.agencyName) return;
+  // Function to process and sort sales
+  const processSales = (sales: Sale[]) => {
+    const pending: Sale[] = [];
+    const synced: Sale[] = [];
 
+    sales.forEach(sale => {
+      // Filter deleted sales based on showDeleted state
+      if (sale.deletedAt && !showDeleted) {
+        return;
+      }
+
+      // Check if sale is synced based on stockUpdated flag
+      if (sale.stockUpdated) {
+        synced.push(sale);
+      } else {
+        pending.push(sale);
+      }
+    });
+
+    // Sort both arrays by timestamp
+    const sortByTimestamp = (a: Sale, b: Sale) => b.date.getTime() - a.date.getTime();
+    pending.sort(sortByTimestamp);
+    synced.sort(sortByTimestamp);
+
+    return { pending, synced };
+  };
+
+  useEffect(() => {
+    if (!user?.company || !user?.agencyName || userLoading) return;
+
+    let unsubscribe: () => void;
+
+    const setupSalesListener = async () => {
       try {
+        // Set up Firestore listener
         const salesQuery = query(
           collection(db, 'ventes'),
           where('company', '==', user.company),
@@ -78,48 +141,79 @@ const SalesRecords: React.FC = () => {
           orderBy('timestamp', 'desc')
         );
 
-        const snapshot = await getDocs(salesQuery);
-        const pending: any[] = [];
-        const synced: any[] = [];
+        unsubscribe = onSnapshot(salesQuery, async (snapshot) => {
+          const firestoreSales: Sale[] = [];
+          
+          snapshot.forEach(doc => {
+            const data = doc.data();
+            const sale: Sale = {
+              id: doc.id,
+              date: data.timestamp instanceof Date ? data.timestamp :
+                    typeof data.timestamp === 'number' ? new Date(data.timestamp) :
+                    data.timestamp.toDate(),
+              deletedAt: data.deletedAt || null,
+              stockUpdated: data.stockUpdated || false,
+              productName: data.productName || [],
+              quantity: data.quantity || [],
+              totalAmount: data.totalAmount || 0,
+              recordedBy: data.recordedBy || '',
+              agency: data.agency || '',
+              company: data.company || '',
+              timestamp: data.timestamp,
+              synced: data.synced || false,
+              ...data
+            };
+            firestoreSales.push(sale);
+          });
 
-        snapshot.forEach(doc => {
-          const data = doc.data();
-          const sale = {
-            id: doc.id,
-            ...data,
-            date: data.timestamp instanceof Date ? data.timestamp :
-                  typeof data.timestamp === 'number' ? new Date(data.timestamp) :
-                  data.timestamp.toDate()
-          };
+          // Get offline sales
+          const offlineSales = await getOfflineSales();
+          const offlineSalesData: Sale[] = offlineSales.map(sale => ({
+            id: sale.id,
+            date: new Date(sale.timestamp),
+            deletedAt: null,
+            stockUpdated: false,
+            productName: sale.productName,
+            quantity: sale.quantity,
+            totalAmount: sale.totalAmount,
+            recordedBy: sale.recordedBy,
+            agency: sale.agency || '',
+            company: sale.company,
+            timestamp: sale.timestamp,
+            synced: false
+          }));
 
-          // Filter deleted sales based on showDeleted state
-          // if (sale.deletedAt && !showDeleted) {
-          //   return;
-          // }
+          // Combine and process all sales
+          const allSales = [...firestoreSales, ...offlineSalesData];
+          const { pending, synced } = processSales(allSales);
 
-          // if (sale.stockUpdated) {
-          //   synced.push(sale);
-          // } else {
-          //   pending.push(sale);
-          // }
+          setPendingSales(pending);
+          setSyncedSales(synced);
+          setLoading(false);
+        }, (error) => {
+          console.error('Error in sales listener:', error);
+          setError('Erreur lors du chargement des ventes');
+          setLoading(false);
         });
 
-        setPendingSales(pending);
-        setSyncedSales(synced);
       } catch (error) {
-        console.error('Error fetching sales:', error);
+        console.error('Error setting up sales listener:', error);
         setError('Erreur lors du chargement des ventes');
-      } finally {
         setLoading(false);
       }
     };
 
-    if (!userLoading && user) {
-      fetchSales();
-    }
-  }, [user, userLoading, showDeleted]);
+    setupSalesListener();
 
-  const handleDeleteClick = (sale: any) => {
+    // Cleanup subscription on unmount or when dependencies change
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [user?.company, user?.agencyName, userLoading, showDeleted]);
+
+  const handleDeleteClick = (sale: Sale) => {
     setSelectedSale(sale);
     setShowDeleteModal(true);
   };
@@ -163,7 +257,7 @@ const SalesRecords: React.FC = () => {
     }
   };
 
-  const SalesList = ({ sales, isPending }: { sales: any[], isPending: boolean }) => (
+  const SalesList = ({ sales, isPending }: { sales: Sale[], isPending: boolean }) => (
     <div className="space-y-4">
       {sales.map(sale => (
         <div 

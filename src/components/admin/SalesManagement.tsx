@@ -71,7 +71,7 @@ const SalesManagement: React.FC<SalesManagementProps> = () => {
           setSales(salesData);
           setLoading(false);
         }, (error) => {
-          console.error('Error fetching sales:', error);
+          console.error('Error in sales listener:', error);
           toast.error('Erreur lors du chargement des ventes');
           setLoading(false);
         });

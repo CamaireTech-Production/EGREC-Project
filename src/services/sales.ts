@@ -50,7 +50,8 @@ export const createSale = async (saleData: any) => {
       deletedBy: null,
       deletedByName: null,
       deleteReason: null,
-      stockUpdated: false // Will be updated when synced
+      stockUpdated: false, // Will be updated when synced
+      synced: false // Track sync status
     };
 
     if (navigator.onLine) {
@@ -114,7 +115,7 @@ export const createSale = async (saleData: any) => {
 
         // STEP 3: Execute all writes atomically
         // Create the sale document with stockUpdated true since we're online
-        transaction.set(saleRef, { ...saleDoc, stockUpdated: true });
+        transaction.set(saleRef, { ...saleDoc, stockUpdated: true, synced: true });
 
         // Update products
         productUpdates.forEach(update => {
@@ -143,7 +144,8 @@ export const createSale = async (saleData: any) => {
         ...saleDoc,
         timestamp: saleData.timestamp.getTime(),
         createdAt: saleData.createdAt.getTime(),
-        updatedAt: saleData.updatedAt.getTime()
+        updatedAt: saleData.updatedAt.getTime(),
+        synced: false
       });
     }
 
