@@ -83,22 +83,25 @@ const SalesRecords: React.FC = () => {
         const synced: any[] = [];
 
         snapshot.forEach(doc => {
+          const data = doc.data();
           const sale = {
             id: doc.id,
-            ...doc.data(),
-            date: doc.data().timestamp.toDate()
+            ...data,
+            date: data.timestamp instanceof Date ? data.timestamp :
+                  typeof data.timestamp === 'number' ? new Date(data.timestamp) :
+                  data.timestamp.toDate()
           };
 
           // Filter deleted sales based on showDeleted state
-          if (sale.deletedAt && !showDeleted) {
-            return;
-          }
+          // if (sale.deletedAt && !showDeleted) {
+          //   return;
+          // }
 
-          if (sale.stockUpdated) {
-            synced.push(sale);
-          } else {
-            pending.push(sale);
-          }
+          // if (sale.stockUpdated) {
+          //   synced.push(sale);
+          // } else {
+          //   pending.push(sale);
+          // }
         });
 
         setPendingSales(pending);

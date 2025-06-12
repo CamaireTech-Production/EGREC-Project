@@ -58,11 +58,16 @@ const SalesManagement: React.FC<SalesManagementProps> = () => {
         }
 
         unsubscribe = onSnapshot(baseQuery, (snapshot) => {
-          const salesData = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data(),
-            timestamp: doc.data().timestamp.toDate()
-          }));
+          const salesData = snapshot.docs.map(doc => {
+            const data = doc.data();
+            return {
+              id: doc.id,
+              ...data,
+              timestamp: data.timestamp instanceof Date ? data.timestamp : 
+                        typeof data.timestamp === 'number' ? new Date(data.timestamp) :
+                        data.timestamp.toDate()
+            };
+          });
           setSales(salesData);
           setLoading(false);
         }, (error) => {

@@ -1,12 +1,12 @@
-import { collection, doc, runTransaction, addDoc, query, where, getDocs, updateDoc, increment, Timestamp, getDoc, setDoc } from 'firebase/firestore';
+import { collection, doc, runTransaction, query, where, getDocs, increment, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { toast } from 'react-hot-toast';
-import { saveOfflineSale } from '../lib/db';
 import CryptoJS from 'crypto-js';
+import { saveOfflineSale } from '../lib/db';
 
 // Generate unique hash for sale
-const generateSaleHash = (saleData: any): string => {
-  const timestamp = Math.floor(saleData.timestamp.getTime() / 1000);
+export const generateSaleHash = (saleData: any): string => {
+  const timestamp = typeof saleData.timestamp === 'number' ? saleData.timestamp : saleData.timestamp.getTime();
   const hashInput = `${timestamp}_${saleData.userUID}_${saleData.totalAmount}_${saleData.productReference.join('_')}`;
   return CryptoJS.SHA256(hashInput).toString();
 };
@@ -38,32 +38,32 @@ export const createSale = async (saleData: any) => {
       throw new Error('Transaction doublon détectée');
     }
 
-    // Add hash and additional fields to sale data
-    const enrichedSaleData = {
+    // Create the sale document with all necessary fields
+    const saleDoc = {
       ...saleData,
       saleHash,
       isDuplicate: false,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: Timestamp.fromDate(saleData.createdAt),
+      updatedAt: Timestamp.fromDate(saleData.updatedAt),
+      timestamp: Timestamp.fromDate(saleData.timestamp),
       deletedAt: null,
       deletedBy: null,
       deletedByName: null,
-      deleteReason: null
+      deleteReason: null,
+      stockUpdated: false // Will be updated when synced
     };
 
-    // Always save to local storage first
-    await saveOfflineSale(enrichedSaleData);
-
-    // If online, also save to Firestore
     if (navigator.onLine) {
+      // If online, save to Firestore
       await runTransaction(db, async (transaction) => {
         // Check again for duplicates within transaction
-        const duplicateCheck = await transaction.get(doc(db, 'ventes', saleHash));
-        if (duplicateCheck.exists()) {
+        const saleRef = doc(db, 'ventes', saleHash);
+        const existingSale = await transaction.get(saleRef);
+        if (existingSale.exists()) {
           throw new Error('Transaction doublon détectée');
         }
 
-        // STEP 1: Perform all reads first
+        // STEP 1: Read all product documents
         const productReads = await Promise.all(
           saleData.productReference.map(async (productId: string) => {
             const productRef = doc(db, 'products', productId);
@@ -85,7 +85,7 @@ export const createSale = async (saleData: any) => {
         const statsRef = doc(db, 'statistics', saleData.company);
         const statsDoc = await transaction.get(statsRef);
 
-        // STEP 2: Validate data and prepare updates
+        // STEP 2: Validate and prepare updates
         const productUpdates = productReads.map((product, index) => {
           const stockParAgence = product.data.stockParAgence || {};
           const currentAgencyStock = stockParAgence[saleData.agency] || 0;
@@ -99,7 +99,6 @@ export const createSale = async (saleData: any) => {
             throw new Error(`Stock insuffisant pour ${saleData.productName[index]} dans l'agence ${saleData.agency} (Disponible: ${currentAgencyStock})`);
           }
 
-          // Prepare the update without executing it
           stockParAgence[saleData.agency] = currentAgencyStock - quantityToSell;
           
           return {
@@ -114,8 +113,8 @@ export const createSale = async (saleData: any) => {
         });
 
         // STEP 3: Execute all writes atomically
-        // Create the sale document with specific ID to prevent duplicates
-        transaction.set(doc(db, 'ventes', saleHash), enrichedSaleData);
+        // Create the sale document with stockUpdated true since we're online
+        transaction.set(saleRef, { ...saleDoc, stockUpdated: true });
 
         // Update products
         productUpdates.forEach(update => {
@@ -137,6 +136,14 @@ export const createSale = async (saleData: any) => {
             createdAt: Timestamp.now()
           });
         }
+      });
+    } else {
+      // If offline, save to local storage
+      await saveOfflineSale({
+        ...saleDoc,
+        timestamp: saleData.timestamp.getTime(),
+        createdAt: saleData.createdAt.getTime(),
+        updatedAt: saleData.updatedAt.getTime()
       });
     }
 

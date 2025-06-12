@@ -105,6 +105,7 @@ const Checkout: React.FC<CheckoutProps> = ({ onClose, onComplete }) => {
 
     setProcessing(true);
     try {
+      console.log('Creating sale...');
       const saleData = {
         productName: items.map(item => item.product.name),
         quantity: items.map(item => item.quantity),
@@ -124,21 +125,23 @@ const Checkout: React.FC<CheckoutProps> = ({ onClose, onComplete }) => {
         updatedAt: new Date()
       };
 
-      if (isOnline) {
-        const result = await createSale(saleData);
-        if (!result.success) {
-          throw new Error(result.error);
-        }
+      const result = await createSale(saleData);
+      if (!result.success) {
+        throw new Error(result.error);
+      }
+      
+      if (navigator.onLine) {
+        console.log('Sale created successfully online');
         toast.success('Vente enregistrée avec succès et stock mis à jour');
       } else {
-        await saveOfflineSale(saleData);
+        console.log('Sale saved offline successfully');
         toast.success('Vente enregistrée localement. Le stock sera mis à jour automatiquement dès le retour de la connexion');
       }
       
       setPaymentProcessed(true);
     } catch (error) {
       console.error('Erreur lors de l\'enregistrement de la vente:', error);
-      toast.error(error instanceof Error ? error.message : 'Une erreur s\'est produite. Veuillez réessayer ou vérifier votre connexion');
+      toast.error(error instanceof Error ? error.message : 'Une erreur s\'est produite. Veuillez réessayer');
     } finally {
       setProcessing(false);
     }

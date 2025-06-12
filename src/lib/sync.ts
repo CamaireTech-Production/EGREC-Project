@@ -6,7 +6,7 @@ import {
   updateSyncAttempts,
   clearSyncedData
 } from './db';
-import { syncStockUpdates } from '../services/sales';
+import { syncStockUpdates, generateSaleHash } from '../services/sales';
 import { toast } from 'react-hot-toast';
 
 let isSyncing = false;
@@ -43,9 +43,10 @@ export const syncOfflineData = async () => {
       for (const sale of batch) {
         try {
           // Check if sale already exists in Firestore
+          const saleHash = generateSaleHash(sale);
           const existingQuery = query(
             collection(firestore, 'ventes'),
-            where('syncId', '==', sale.syncId)
+            where('saleHash', '==', saleHash)
           );
           const existingDocs = await getDocs(existingQuery);
           
